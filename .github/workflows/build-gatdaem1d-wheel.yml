@@ -1,0 +1,162 @@
+name: Build gatdaem1d wheel for Colab
+
+# Builds two portable gatdaem1d wheels on ubuntu-22.04 (same glibc as Colab):
+#   - x86-64-v3  (AVX2, default — modern Xeons in Colab)
+#   - x86-64     (baseline fallback, if v3 causes SIGILL on exotic VMs)
+#
+# Triggers:
+#   * push to main/develop           — upload as workflow artifacts (downloadable)
+#   * tag  gatdaem1d-v*             — create a GitHub Release with both wheels
+#   * manual dispatch               — build only, no release
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['gatdaem1d-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed by softprops/action-gh-release to create releases
+
+jobs:
+  build:
+    name: Build ${{ matrix.cpu_target }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # build number: v3=1 (pip prefers higher), baseline=0 (fallback)
+          - cpu_target: x86-64-v3
+            build_num: 1
+            label: avx2
+          - cpu_target: x86-64
+            build_num: 0
+            label: baseline
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              build-essential libfftw3-dev libfftw3-double3 cmake pkg-config \
+              git patchelf
+          python -m pip install --upgrade pip wheel auditwheel
+
+      - name: Build gatdaem1d.so (portable, bundled fftw)
+        run: |
+          bash scripts/cmake_build_script_colab_gatdaem1d.sh ${{ matrix.cpu_target }}
+
+      - name: Build wheel
+        run: |
+          STAGE="wheel-stage-${{ matrix.cpu_target }}/python"
+          pip wheel "$STAGE" -w wheels/ --no-deps
+          # Default output: gatdaem1d-2.0.3-py3-none-any.whl
+          ls -la wheels/
+
+      - name: Retag wheel (linux_x86_64 so auditwheel accepts it)
+        run: |
+          cd wheels
+          WHL=$(ls gatdaem1d-*.whl | head -1)
+          python -m wheel tags --platform-tag linux_x86_64 --remove "$WHL"
+          ls -la
+
+      - name: auditwheel repair (bundle libstdc++, tag manylinux_2_35)
+        id: auditwheel
+        continue-on-error: true
+        run: |
+          cd wheels
+          WHL=$(ls gatdaem1d-*-linux_x86_64.whl | head -1)
+          auditwheel repair --plat manylinux_2_35_x86_64 "$WHL" -w repaired/
+          ls -la repaired/
+
+      - name: Fallback — manual retag if auditwheel failed
+        if: steps.auditwheel.outcome == 'failure'
+        run: |
+          echo "auditwheel failed (likely $ORIGIN rpath confusion); retagging manually"
+          cd wheels
+          WHL=$(ls gatdaem1d-*-linux_x86_64.whl | head -1)
+          mkdir -p repaired
+          python -m wheel tags --platform-tag manylinux_2_35_x86_64 "$WHL" -w repaired/
+          ls -la repaired/
+
+      - name: Set build tag (v3=1, baseline=0)
+        run: |
+          cd wheels/repaired
+          WHL=$(ls gatdaem1d-*.whl | head -1)
+          python -m wheel tags --build ${{ matrix.build_num }} --remove "$WHL"
+          ls -la
+
+      - name: Verify wheel imports in clean env (no fftw installed)
+        run: |
+          python -m venv /tmp/testenv
+          source /tmp/testenv/bin/activate
+          pip install numpy matplotlib
+          WHL=$(ls wheels/repaired/gatdaem1d-*.whl | head -1)
+          pip install "$WHL"
+          python -c "import gatdaem1d; print('OK:', gatdaem1d.__file__)"
+
+      - name: Run smoke test (skytem example)
+        run: |
+          source /tmp/testenv/bin/activate
+          STAGE="wheel-stage-${{ matrix.cpu_target }}/python"
+          if [ -f "$STAGE/examples/skytem_example.py" ]; then
+            python "$STAGE/examples/skytem_example.py"
+          else
+            echo "skytem_example.py not found, skipping"
+          fi
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatdaem1d-wheel-${{ matrix.label }}
+          path: wheels/repaired/gatdaem1d-*.whl
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/gatdaem1d-v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gatdaem1d-wheel-*
+          merge-multiple: true
+          path: release-wheels/
+
+      - name: List wheels for release
+        run: ls -la release-wheels/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body: |
+            ## gatdaem1d prebuilt wheels for Google Colab
+
+            ### Install (in a Colab notebook)
+            **Default — AVX2 (x86-64-v3), recommended for Colab:**
+            ```python
+            !pip install https://github.com/AUProbGeo/ga-aem-python-colab/releases/download/${{ github.ref_name }}/gatdaem1d-2.0.3-1-py3-none-manylinux_2_35_x86_64.whl
+            ```
+
+            **Fallback — baseline (x86-64), if the AVX2 wheel crashes with SIGILL:**
+            ```python
+            !pip install https://github.com/AUProbGeo/ga-aem-python-colab/releases/download/${{ github.ref_name }}/gatdaem1d-2.0.3-0-py3-none-manylinux_2_35_x86_64.whl
+            ```
+
+            ### Verify
+            ```python
+            import gatdaem1d
+            print(gatdaem1d.__file__)
+            ```
+
+            No `apt install` needed — libfftw3 is bundled inside the wheel.
+          files: release-wheels/gatdaem1d-*.whl
+          prerelease: false

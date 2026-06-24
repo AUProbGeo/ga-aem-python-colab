@@ -1,0 +1,11 @@
+The gatdaem1d C++ library and Python wrapper are licensed under the
+GNU GPL Version 2.0 by:
+
+  Crown Copyright Commonwealth of Australia (Geoscience Australia) 2024.
+
+See http://www.gnu.org/licenses/gpl-2.0.html for the full licence text.
+
+This packaging repository (ga-aem-python-colab) redistributes unmodified
+upstream source at build time and distributes prebuilt binary wheels that
+link against FFTW (GPLv2-compatible) and libstdc++ (GPLv3 with GCC runtime
+exception). The combined work remains GPLv2.
