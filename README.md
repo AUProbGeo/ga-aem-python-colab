@@ -9,18 +9,27 @@ The upstream project ships a source build that requires a compiler and FFTW.
 This repo packages **prebuilt, self-contained wheels** so that on Colab you can
 just `pip install` and `import` — no `apt install`, no compiler.
 
-## Install on Google Colab
+**PyPI name:** `ga-aem-forward-linux`  **Import name:** `gatdaem1d`
 
+## Install
+
+### From PyPI (recommended — works on Colab and any modern Linux)
+```bash
+pip install ga-aem-forward-linux
+```
+pip automatically picks the AVX2 wheel (build `-1-`) on capable hosts.
+
+### From GitHub Release (direct URL — for Colab notebooks or pinning a version)
 Open a Colab notebook and run **one** of these in a cell:
 
 **Recommended (AVX2 / x86-64-v3 — fastest, works on all modern Colab VMs):**
 ```python
-!pip install https://github.com/AUProbGeo/ga-aem-python-colab/releases/latest/download/gatdaem1d-2.0.3-1-py3-none-manylinux_2_35_x86_64.whl
+!pip install https://github.com/AUProbGeo/ga-aem-python-colab/releases/latest/download/ga_aem_forward_linux-2.0.3-1-py3-none-manylinux_2_35_x86_64.whl
 ```
 
 **Fallback (baseline x86-64 — use only if the AVX2 wheel crashes with `SIGILL`):**
 ```python
-!pip install https://github.com/AUProbGeo/ga-aem-python-colab/releases/latest/download/gatdaem1d-2.0.3-0-py3-none-manylinux_2_35_x86_64.whl
+!pip install https://github.com/AUProbGeo/ga-aem-python-colab/releases/latest/download/ga_aem_forward_linux-2.0.3-0-py3-none-manylinux_2_35_x86_64.whl
 ```
 
 > The `latest` URL redirects to the most recent `gatdaem1d-v*` release. To pin a
@@ -51,8 +60,8 @@ geometry = gatdaem1d.Geometry(tx_height=30.0)
 | `-1-` (default) | `x86-64-v3` (AVX2, Haswell) | Modern Colab VMs (Xeons). Fastest. |
 | `-0-` (fallback) | `x86-64` (SSE2 baseline) | Exotic/old VMs where AVX2 is absent and the default wheel raises `SIGILL`. |
 
-`pip` picks the higher build number by default, so `pip install` with no URL
-(preferred once on PyPI) automatically gets the AVX2 variant.
+`pip` picks the higher build number by default, so `pip install ga-aem-forward-linux`
+automatically gets the AVX2 variant.
 
 ## What's bundled
 
@@ -74,7 +83,7 @@ runs on `ubuntu-22.04` (matching Colab's glibc 2.35):
 3. `patchelf --set-rpath '$ORIGIN'` on `gatdaem1d.so` and copy `libfftw3.so.3` next to it.
 4. `pip wheel` → `auditwheel repair` (tags `manylinux_2_35_x86_64`, bundles libstdc++).
 5. Import test in a clean venv **without** FFTW installed (proves self-containment).
-6. On `gatdaem1d-v*` tags: creates a GitHub Release with both wheels.
+6. On `gatdaem1d-v*` tags: creates a GitHub Release with both wheels and publishes to PyPI via Trusted Publishing.
 
 ## Building locally (for testing)
 
@@ -99,13 +108,37 @@ auditwheel repair --plat manylinux_2_35_x86_64 wheel-stage-x86-64-v3/wheels/*.wh
 
 ## Releasing a new version
 
-1. Update the version in `scripts/ga-aem-src/python/pyproject.toml` (handled automatically — the workflow clones upstream; to override the version, fork ga-aem or patch `pyproject.toml` in the build script).
+1. The version is read from upstream's `pyproject.toml` (currently `2.0.3`).
+   To override, patch it in `scripts/cmake_build_script_colab_gatdaem1d.sh`
+   (the `sed` line under "2b. Patch upstream pyproject.toml").
 2. Tag and push:
    ```bash
    git tag gatdaem1d-v2.0.3
    git push origin gatdaem1d-v2.0.3
    ```
-3. The workflow builds both wheels and publishes a Release. The `latest` install URL automatically points to it.
+3. The workflow builds both wheels, publishes a GitHub Release, and uploads to PyPI via Trusted Publishing (one-time setup on pypi.org — see below). The `latest` install URL automatically points to it.
+
+## Publishing to PyPI
+
+PyPI name: `ga-aem-forward-linux`. Two ways to publish:
+
+### CI auto-publish (Trusted Publishing — recommended)
+One-time setup on https://pypi.org/manage/account/publishing/ → "Add a pending publisher":
+- PyPI project name: `ga-aem-forward-linux`
+- Owner: `AUProbGeo`
+- Repository: `ga-aem-python-colab`
+- Workflow: `build-gatdaem1d-wheel.yml`
+- Environment: `pypi`
+
+After this, every `gatdaem1d-v*` tag push auto-publishes to PyPI. No API tokens needed.
+
+### Local manual publish (`pypi_build_script`)
+For the first upload (before Trusted Publishing is configured) or manual control:
+```bash
+./pypi_build_script                 # downloads wheels from latest Release
+./pypi_build_script gatdaem1d-v2.0.3 # specific tag
+```
+Prompts for TestPyPI then PyPI. Requires `twine` and credentials in `~/.pypirc`.
 
 ## Source build fallback (non-Colab Linux)
 

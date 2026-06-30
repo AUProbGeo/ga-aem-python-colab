@@ -1,13 +1,15 @@
 name: Build gatdaem1d wheel for Colab
 
-# Builds two portable gatdaem1d wheels on ubuntu-22.04 (same glibc as Colab):
+# Builds two portable ga-aem-forward-linux wheels on ubuntu-22.04 (same glibc as Colab):
 #   - x86-64-v3  (AVX2, default — modern Xeons in Colab)
 #   - x86-64     (baseline fallback, if v3 causes SIGILL on exotic VMs)
 #
+# PyPI name: ga-aem-forward-linux  (import stays 'gatdaem1d')
+#
 # Triggers:
 #   * push to main/develop           — upload as workflow artifacts (downloadable)
-#   * tag  gatdaem1d-v*             — create a GitHub Release with both wheels
-#   * manual dispatch               — build only, no release
+#   * tag  gatdaem1d-v*              — create a GitHub Release + publish to PyPI
+#   * manual dispatch                — build only, no release
 
 on:
   push:
@@ -56,13 +58,13 @@ jobs:
         run: |
           STAGE="wheel-stage-${{ matrix.cpu_target }}/python"
           pip wheel "$STAGE" -w wheels/ --no-deps
-          # Default output: gatdaem1d-2.0.3-py3-none-any.whl
+          # Output: ga_aem_forward_linux-2.0.3-py3-none-any.whl
           ls -la wheels/
 
       - name: Retag wheel (linux_x86_64 so auditwheel accepts it)
         run: |
           cd wheels
-          WHL=$(ls gatdaem1d-*.whl | head -1)
+          WHL=$(ls ga_aem_forward_linux-*.whl | head -1)
           python -m wheel tags --platform-tag linux_x86_64 --remove "$WHL"
           ls -la
 
@@ -71,7 +73,7 @@ jobs:
         continue-on-error: true
         run: |
           cd wheels
-          WHL=$(ls gatdaem1d-*-linux_x86_64.whl | head -1)
+          WHL=$(ls ga_aem_forward_linux-*-linux_x86_64.whl | head -1)
           auditwheel repair --plat manylinux_2_35_x86_64 "$WHL" -w repaired/
           ls -la repaired/
 
@@ -80,7 +82,7 @@ jobs:
         run: |
           echo "auditwheel failed (likely $ORIGIN rpath confusion); retagging manually"
           cd wheels
-          WHL=$(ls gatdaem1d-*-linux_x86_64.whl | head -1)
+          WHL=$(ls ga_aem_forward_linux-*-linux_x86_64.whl | head -1)
           mkdir -p repaired
           python -m wheel tags --platform-tag manylinux_2_35_x86_64 "$WHL" -w repaired/
           ls -la repaired/
@@ -88,7 +90,7 @@ jobs:
       - name: Set build tag (v3=1, baseline=0)
         run: |
           cd wheels/repaired
-          WHL=$(ls gatdaem1d-*.whl | head -1)
+          WHL=$(ls ga_aem_forward_linux-*.whl | head -1)
           python -m wheel tags --build ${{ matrix.build_num }} --remove "$WHL"
           ls -la
 
@@ -97,7 +99,7 @@ jobs:
           python -m venv /tmp/testenv
           source /tmp/testenv/bin/activate
           pip install numpy matplotlib
-          WHL=$(ls wheels/repaired/gatdaem1d-*.whl | head -1)
+          WHL=$(ls wheels/repaired/ga_aem_forward_linux-*.whl | head -1)
           pip install "$WHL"
           python -c "import gatdaem1d; print('OK:', gatdaem1d.__file__)"
 
@@ -119,7 +121,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gatdaem1d-wheel-${{ matrix.label }}
-          path: wheels/repaired/gatdaem1d-*.whl
+          path: wheels/repaired/ga_aem_forward_linux-*.whl
           if-no-files-found: error
 
   release:
@@ -142,17 +144,25 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           body: |
-            ## gatdaem1d prebuilt wheels for Google Colab
+            ## ga-aem-forward-linux prebuilt wheels for Google Colab
 
-            ### Install (in a Colab notebook)
+            PyPI name: `ga-aem-forward-linux`  (import: `gatdaem1d`)
+
+            ### Install from PyPI (recommended)
+            ```bash
+            pip install ga-aem-forward-linux
+            ```
+            pip automatically picks the AVX2 wheel (build `-1-`) on capable hosts.
+
+            ### Install from this Release (direct URL)
             **Default — AVX2 (x86-64-v3), recommended for Colab:**
             ```python
-            !pip install https://github.com/AUProbGeo/ga-aem-python-colab/releases/download/${{ github.ref_name }}/gatdaem1d-2.0.3-1-py3-none-manylinux_2_35_x86_64.whl
+            !pip install https://github.com/AUProbGeo/ga-aem-python-colab/releases/download/${{ github.ref_name }}/ga_aem_forward_linux-2.0.3-1-py3-none-manylinux_2_35_x86_64.whl
             ```
 
             **Fallback — baseline (x86-64), if the AVX2 wheel crashes with SIGILL:**
             ```python
-            !pip install https://github.com/AUProbGeo/ga-aem-python-colab/releases/download/${{ github.ref_name }}/gatdaem1d-2.0.3-0-py3-none-manylinux_2_35_x86_64.whl
+            !pip install https://github.com/AUProbGeo/ga-aem-python-colab/releases/download/${{ github.ref_name }}/ga_aem_forward_linux-2.0.3-0-py3-none-manylinux_2_35_x86_64.whl
             ```
 
             ### Verify
@@ -162,5 +172,25 @@ jobs:
             ```
 
             No `apt install` needed — libfftw3 is bundled inside the wheel.
-          files: release-wheels/gatdaem1d-*.whl
+          files: release-wheels/ga_aem_forward_linux-*.whl
           prerelease: false
+
+  pypi:
+    name: Publish to PyPI
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/gatdaem1d-v')
+    environment: pypi   # one-time Trusted Publisher setup required on pypi.org
+    permissions:
+      id-token: write   # OIDC trusted publishing, no API token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gatdaem1d-wheel-*
+          merge-multiple: true
+          path: dist/
+
+      - name: List wheels for PyPI
+        run: ls -la dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

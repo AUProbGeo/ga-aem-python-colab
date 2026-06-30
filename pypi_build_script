@@ -1,0 +1,118 @@
+#!/bin/bash
+#
+# Build and publish script for the "ga-aem-forward-linux" package (PyPI name).
+# The import name is "gatdaem1d".
+#
+# Unlike integrate_module/pypi_build_script, this package's wheels are built
+# in CI (ubuntu-22.04) — not locally — because they contain a prebuilt .so
+# that must match Colab's glibc. This script:
+#   1. Downloads the wheel assets from the latest GitHub Release
+#      (or a specific tag if passed as $1).
+#   2. Optionally uploads to TestPyPI for verification.
+#   3. Optionally uploads to PyPI for production.
+#
+# Usage:
+#   ./pypi_build_script                 # use latest release
+#   ./pypi_build_script gatdaem1d-v2.0.3 # use a specific tag
+#
+# Prerequisites:
+#   - twine installed (pip install --upgrade twine)
+#   - PyPI / TestPyPI credentials configured (~/.pypirc or env vars)
+#     See https://packaging.python.org/specifications/pypirc/
+#
+set -e
+
+REPO="AUProbGeo/ga-aem-python-colab"
+MODULE_NAME="ga-aem-forward-linux"
+TAG="${1:-latest}"
+
+echo "=== ga-aem-forward-linux PyPI publish script ==="
+echo "Repository: https://github.com/$REPO"
+echo "Release tag: $TAG"
+echo ""
+
+# ---------------------------------------------------------------------------
+# 1. Clean and prepare dist/
+# ---------------------------------------------------------------------------
+echo "Cleaning dist/..."
+rm -rf dist/
+mkdir -p dist/
+
+# ---------------------------------------------------------------------------
+# 2. Download wheels from the GitHub Release
+# ---------------------------------------------------------------------------
+if [ "$TAG" = "latest" ]; then
+    API_URL="https://api.github.com/repos/$REPO/releases/latest"
+else
+    API_URL="https://api.github.com/repos/$REPO/releases/tags/$TAG"
+fi
+
+echo "Fetching release info from $API_URL ..."
+ASSET_URLS=$(curl -s "$API_URL" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+if 'message' in d and d.get('message') != 'Not Found':
+    print(d['message'], file=sys.stderr); sys.exit(1)
+assets = d.get('assets', [])
+if not assets:
+    print('No assets found in release', file=sys.stderr); sys.exit(1)
+for a in assets:
+    if a['name'].endswith('.whl'):
+        print(a['browser_download_url'])
+")
+
+if [ -z "$ASSET_URLS" ]; then
+    echo "ERROR: no wheel assets found in release '$TAG'" >&2
+    exit 1
+fi
+
+for url in $ASSET_URLS; do
+    echo "Downloading $(basename "$url")..."
+    curl -L -o "dist/$(basename "$url")" "$url"
+done
+
+echo ""
+echo "=== Downloaded wheels ==="
+ls -l dist/
+
+# ---------------------------------------------------------------------------
+# 3. Make sure twine is available
+# ---------------------------------------------------------------------------
+echo ""
+echo "Ensuring twine is installed..."
+pip install --upgrade twine
+
+# ---------------------------------------------------------------------------
+# 4. Upload to TestPyPI first (optional)
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== TestPyPI Upload ==="
+read -p "Upload to TestPyPI for verification? [y/N] " test_upload
+if [[ $test_upload =~ ^[Yy]$ ]]; then
+    python -m twine upload --repository testpypi dist/*.whl
+    echo ""
+    echo "TestPyPI upload complete!"
+    echo "You can install and test with:"
+    echo "  pip install --index-url https://test.pypi.org/simple/ \\
+        --extra-index-url https://pypi.org/simple/ $MODULE_NAME"
+else
+    echo "Skipped TestPyPI."
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Upload to PyPI (optional)
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== PyPI Upload ==="
+read -p "Upload to PyPI for production release? [y/N] " prod_upload
+if [[ $prod_upload =~ ^[Yy]$ ]]; then
+    python -m twine upload dist/*.whl
+    echo ""
+    echo "PyPI upload complete!"
+    echo "Your package is now available via:"
+    echo "  pip install $MODULE_NAME"
+else
+    echo ""
+    echo "Skipped PyPI. When ready for the real release, run:"
+    echo "  python -m twine upload dist/*.whl"
+fi

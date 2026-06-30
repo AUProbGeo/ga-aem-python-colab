@@ -55,6 +55,34 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 2b. Patch upstream pyproject.toml for PyPI publishing (ga-aem-forward-linux)
+# ---------------------------------------------------------------------------
+PYPROJECT="$SRC_DIR/python/pyproject.toml"
+if [ ! -f "$PYPROJECT" ]; then
+    echo "ERROR: $PYPROJECT not found" >&2; exit 1
+fi
+
+# Distribution name on PyPI: ga-aem-forward-linux (import stays 'gatdaem1d').
+sed -i 's/^name = "gatdaem1d"/name = "ga-aem-forward-linux"/' "$PYPROJECT"
+
+# Append project URLs and Linux classifiers (idempotent: only add if absent).
+if ! grep -q '\[project.urls\]' "$PYPROJECT"; then
+    cat >> "$PYPROJECT" <<'EOF'
+
+[project.urls]
+Homepage = "https://github.com/AUProbGeo/ga-aem-python-colab"
+Repository = "https://github.com/AUProbGeo/ga-aem-python-colab"
+Issues = "https://github.com/AUProbGeo/ga-aem-python-colab/issues"
+EOF
+fi
+if ! grep -q 'POSIX :: Linux' "$PYPROJECT"; then
+    sed -i "/^classifiers = \[/a\\    'Operating System :: POSIX :: Linux',\n    'Operating System :: POSIX :: Linux :: Ubuntu'," "$PYPROJECT"
+fi
+
+echo "--- patched pyproject.toml ---"
+cat "$PYPROJECT"
+
+# ---------------------------------------------------------------------------
 # 3. Configure & build with portable flags
 # ---------------------------------------------------------------------------
 BUILD_DIR="$SRC_DIR/build-colab-$CPU_TARGET"
